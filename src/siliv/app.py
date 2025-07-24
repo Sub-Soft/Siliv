@@ -6,9 +6,9 @@ import math # Needed for rounding/snapping
 
 # PyQt6 Imports
 from PyQt6.QtWidgets import (
-    QApplication, QSystemTrayIcon, QMenu, QMessageBox,
-    QWidgetAction
-)
+     QApplication, QSystemTrayIcon, QMenu, QMessageBox,
+     QWidgetAction, QCheckBox
+ )
 # Import QSettings
 from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal, QSettings
 from PyQt6.QtGui import QIcon, QCursor, QAction
@@ -22,6 +22,7 @@ from siliv.ui import widgets
 ORGANIZATION_NAME = "SilivProject" # Or your preferred organization name
 APPLICATION_NAME = "Siliv"
 SAVED_VRAM_KEY = "user/savedVramMb"
+LAUNCH_AT_LOGIN_KEY = "user/launchAtLogin"
 # --------------------------
 
 class MenuBarApp(QObject):
@@ -57,6 +58,8 @@ class MenuBarApp(QObject):
         self.slider_value_action = None # The "Apply X GB" action
         self.refresh_action = None
         self.quit_action = None
+        self.launch_at_login_checkbox = None
+        self.launch_at_login_action = None
 
         # --- Application Setup ---
         self.app = QApplication.instance()
@@ -301,11 +304,21 @@ class MenuBarApp(QObject):
         self.slider_widget_action = QWidgetAction(self.menu)
         self.slider_widget_action.setDefaultWidget(self.slider_widget)
         self.menu.addAction(self.slider_widget_action)
-
+ 
         self.slider_value_action = QAction("Allocate ... GB VRAM")
         self.slider_value_action.setEnabled(False)
         self.slider_value_action.triggered.connect(self.apply_slider_value_from_action)
         self.menu.addAction(self.slider_value_action)
+
+        # --- Launch at Login ---
+        self.launch_at_login_checkbox = QCheckBox("Launch at Login")
+        saved_launch_pref = self.settings.value(LAUNCH_AT_LOGIN_KEY, False, type=bool)
+        self.launch_at_login_checkbox.setChecked(bool(saved_launch_pref))
+        self.launch_at_login_checkbox.stateChanged.connect(self.handle_launch_at_login_toggled)
+        self.launch_at_login_action = QWidgetAction(self.menu)
+        self.launch_at_login_action.setDefaultWidget(self.launch_at_login_checkbox)
+        self.menu.addAction(self.launch_at_login_action)
+
         self.menu.addSeparator()
 
         # --- Other Actions ---
@@ -528,6 +541,21 @@ class MenuBarApp(QObject):
         self.target_vram_mb = value_mb
         self.update_menu_items()
         self._set_vram_and_update(value_mb)
+
+    # --- Launch at Login handler ---
+    def handle_launch_at_login_toggled(self, state):
+        """Enables/Disables autostart when checkbox is toggled."""
+        enabled = (state == Qt.CheckState.Checked)
+        success, message = utils.set_launch_at_login(enabled)
+        if success:
+            self.settings.setValue(LAUNCH_AT_LOGIN_KEY, enabled)
+            self.settings.sync()
+        else:
+            QMessageBox.warning(None, "Launch at Login", message)
+            # Revert state silently
+            self.launch_at_login_checkbox.blockSignals(True)
+            self.launch_at_login_checkbox.setChecked(not enabled)
+            self.launch_at_login_checkbox.blockSignals(False)
 
     # --- Startup Application Method ---
     def apply_saved_vram_on_startup(self):
