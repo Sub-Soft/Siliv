@@ -172,3 +172,61 @@ def set_vram_mb(value_mb):
         print(error_msg)
         QMessageBox.critical(None, "VRAM Set Error", error_msg)
         return False, error_msg
+
+# ---------------------------------------------------------------------------
+# Launch at Login helpers
+# ---------------------------------------------------------------------------
+def set_launch_at_login(enabled):
+    """
+    Enables or disables launching Siliv automatically when the user logs in
+    by creating or removing a LaunchAgent plist in the user's LaunchAgents
+    folder.
+
+    Args:
+        enabled (bool): True to enable autostart, False to disable.
+
+    Returns:
+        tuple(bool success, str message)
+    """
+    if platform.system() != "Darwin":
+        return False, "Launch at login only supported on macOS."
+
+    plist_dir = os.path.expanduser("~/Library/LaunchAgents")
+    plist_path = os.path.join(plist_dir, "com.siliv.vramtool.plist")
+
+    # Determine executable path: when bundled with PyInstaller this resolves
+    # to the deployed binary; during development it will be the Python script.
+    exec_path = os.path.abspath(sys.argv[0])
+
+    if enabled:
+        try:
+            os.makedirs(plist_dir, exist_ok=True)
+            plist_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.siliv.vramtool</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exec_path}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>'''
+            with open(plist_path, "w", encoding="utf-8") as fp:
+                fp.write(plist_content)
+            # Load the agent; ignore non-zero exit codes if already loaded
+            subprocess.run(["launchctl", "load", plist_path], check=False)
+            return True, "Enabled launch at login"
+        except Exception as e:
+            return False, f"Failed to enable launch at login: {e}"
+    else:
+        try:
+            subprocess.run(["launchctl", "unload", plist_path], check=False)
+            if os.path.exists(plist_path):
+                os.remove(plist_path)
+            return True, "Disabled launch at login"
+        except Exception as e:
+            return False, f"Failed to disable launch at login: {e}"
