@@ -9,20 +9,13 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QMessageBox,
     QWidgetAction
 )
-# Import QSettings
-from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal, QSettings
+from PyQt6.QtCore import QTimer, QObject
 from PyQt6.QtGui import QIcon, QCursor, QAction
 
 # Local Imports
 from siliv import config # config.RESERVED_SYSTEM_RAM_MIN will be used for warning threshold
 from siliv import utils
 from siliv.ui import widgets
-
-# --- Settings Constants ---
-ORGANIZATION_NAME = "SilivProject" # Or your preferred organization name
-APPLICATION_NAME = "Siliv"
-SAVED_VRAM_KEY = "user/savedVramMb"
-# --------------------------
 
 class MenuBarApp(QObject):
     def __init__(self, icon_path, parent=None):
@@ -60,7 +53,6 @@ class MenuBarApp(QObject):
 
         # --- Application Setup ---
         self.app = QApplication.instance()
-        self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
 
         self.is_operational = self.perform_initial_checks()
         if not self.is_operational:
@@ -96,11 +88,6 @@ class MenuBarApp(QObject):
             print("[App] Tray icon not shown due to critical initialization failure.")
 
         self.update_menu_items()
-
-        # --- Apply Saved VRAM on Startup ---
-        if self.total_ram_mb > 0:
-            self.apply_saved_vram_on_startup()
-        # ---------------------------------
 
         # --- Refresh Timer ---
         self.refresh_timer = QTimer(self)
@@ -492,9 +479,7 @@ class MenuBarApp(QObject):
         success, message = utils.set_vram_mb(clamped_mb)
 
         if success:
-            print(f"VRAM set command reported success via utils. Saving {clamped_mb} MB to settings.")
-            self.settings.setValue(SAVED_VRAM_KEY, clamped_mb)
-            self.settings.sync()
+            print("VRAM set command reported success via utils.")
             QTimer.singleShot(1500, self._refresh_data_and_update_menu)
         else:
             print(f"Failed to set VRAM or action cancelled. Message from utils: {message}")
@@ -528,45 +513,6 @@ class MenuBarApp(QObject):
         self.target_vram_mb = value_mb
         self.update_menu_items()
         self._set_vram_and_update(value_mb)
-
-    # --- Startup Application Method ---
-    def apply_saved_vram_on_startup(self):
-        # ... (This method remains unchanged from the previous version, but uses updated clamping) ...
-        if not self.is_operational:
-            print("[Startup Apply] Not operational, skipping saved VRAM check.")
-            return
-
-        saved_vram_mb_variant = self.settings.value(SAVED_VRAM_KEY, defaultValue=None)
-        saved_vram_mb = None
-        if saved_vram_mb_variant is not None:
-            try:
-                saved_vram_mb = int(saved_vram_mb_variant)
-            except (ValueError, TypeError):
-                print(f"[Startup Apply] Warning: Could not parse saved VRAM value '{saved_vram_mb_variant}'. Ignoring.")
-                saved_vram_mb = None
-
-        if saved_vram_mb is not None:
-            print(f"[Startup Apply] Found saved VRAM setting: {saved_vram_mb} MB")
-            print(f"[Startup Apply] Current VRAM setting is: {self.current_vram_mb} MB")
-
-            if saved_vram_mb != self.current_vram_mb:
-                print(f"[Startup Apply] Saved VRAM ({saved_vram_mb} MB) differs from current ({self.current_vram_mb} MB). Applying saved value.")
-
-                # Use the current valid range [min_vram_mb, max_vram_mb] for clamping
-                clamped_saved_vram = max(self.min_vram_mb, min(saved_vram_mb, self.max_vram_mb))
-                if clamped_saved_vram != saved_vram_mb:
-                     print(f"[Startup Apply] Warning: Clamping saved VRAM {saved_vram_mb}MB to current valid range [{self.min_vram_mb}-{self.max_vram_mb}]: {clamped_saved_vram}MB")
-
-                # Apply directly on startup (will prompt for password if needed)
-                # The warning check is now inside _set_vram_and_update, so it will trigger here too
-                self.target_vram_mb = clamped_saved_vram
-                self.update_menu_items()
-                self._set_vram_and_update(clamped_saved_vram) # This call now includes the warning logic
-
-            else:
-                print("[Startup Apply] Saved VRAM matches current setting. No action needed.")
-        else:
-            print("[Startup Apply] No saved VRAM setting found.")
 
 
     # --- Utility Methods for User Feedback ---
