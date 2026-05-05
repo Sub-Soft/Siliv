@@ -13,8 +13,17 @@ SYSCTL_PATH = "/usr/sbin/sysctl"
 def run_command(command):
     """Executes a shell command and returns its output."""
     try:
-        # Use sysctl path directly
-        result = subprocess.run(f"{SYSCTL_PATH}/{command}", capture_output=True, text=True, check=True, shell=True)
+        normalized_command = command.strip()
+        if normalized_command.startswith("sysctl "):
+            normalized_command = normalized_command[len("sysctl "):]
+
+        result = subprocess.run(
+            f"{SYSCTL_PATH} {normalized_command}",
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=True,
+        )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         # Ignore "unknown oid" errors which can happen during version checks
