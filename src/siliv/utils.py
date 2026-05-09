@@ -7,11 +7,23 @@ import platform
 import os
 from PyQt6.QtWidgets import QMessageBox # For showing errors related to util failures
 
+SUDO_PATH = "/usr/bin/sudo"
+SYSCTL_PATH = "/usr/sbin/sysctl"
+
 def run_command(command):
     """Executes a shell command and returns its output."""
     try:
-        # Use sysctl path directly
-        result = subprocess.run(f"/usr/sbin/{command}", capture_output=True, text=True, check=True, shell=True)
+        normalized_command = command.strip()
+        if normalized_command.startswith("sysctl "):
+            normalized_command = normalized_command[len("sysctl "):]
+
+        result = subprocess.run(
+            f"{SYSCTL_PATH} {normalized_command}",
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=True,
+        )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         # Ignore "unknown oid" errors which can happen during version checks
@@ -112,8 +124,48 @@ def get_current_vram_mb(total_ram_mb):
         # print(f"Current VRAM read from '{vram_key}': {current_limit_mb} MB")
         return current_limit_mb
 
+def _reset_sudo_timestamp():
+    """Invalidate sudo's cached credentials after a privileged operation."""
+    try:
+        result = subprocess.run(
+            [SUDO_PATH, "-k"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            error_message = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            print(f"Warning: Failed to reset sudo timestamp: {error_message}")
+    except FileNotFoundError:
+        print(f"Warning: Could not reset sudo timestamp because {SUDO_PATH} was not found.")
+    except Exception as e:
+        print(f"Warning: Failed to reset sudo timestamp: {e}")
+
+def _run_with_sudo(command):
+    """Run a command with sudo and always clear sudo's cached credentials afterwards."""
+    try:
+        return subprocess.run(
+            [SUDO_PATH, *command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        _reset_sudo_timestamp()
+
 def set_vram_mb(value_mb):
-    """Sets the VRAM limit using the appropriate sysctl key via osascript.
+    """Set the macOS VRAM limit using sysctl through sudo.
+
+    This function intentionally invokes `/usr/bin/sudo` directly instead of
+    AppleScript's `do shell script ... with administrator privileges` grammar.
+    Keeping privilege escalation in the subprocess call avoids nested
+    AppleScript/shell quoting and removes the dependency on osascript for this
+    operation. The sudo timestamp is invalidated immediately afterwards so the
+    privilege window does not remain open longer than necessary.
+
+    Args:
+        value_mb: Requested VRAM limit in megabytes. The value must be coercible
+            to an integer before it is passed to sysctl.
 
     Returns:
         tuple: (bool: success, str: message)
@@ -127,46 +179,54 @@ def set_vram_mb(value_mb):
 
     try:
         target_value = int(value_mb)
-    except ValueError:
+    except (TypeError, ValueError):
         return False, f"Invalid VRAM value: {value_mb}"
 
-    # Construct the shell command to be run with administrator privileges
-    command_to_run = f'/usr/sbin/sysctl -w {vram_key}={target_value}'
+    command = [SYSCTL_PATH, "-w", f"{vram_key}={target_value}"]
 
-    # Escape the command for embedding within the AppleScript string
-    escaped_command = command_to_run.replace('"', '\\"')
-
-    # Construct the full osascript command
-    osascript_cmd = f"osascript -e 'do shell script \"{escaped_command}\" with administrator privileges'"
-
-    print(f"Attempting to set {vram_key} to {target_value} via osascript...")
+    print(f"Attempting to set {vram_key} to {target_value} via sudo...")
 
     try:
-        # Run the osascript command
-        process = subprocess.Popen(osascript_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        stdout, stderr = process.communicate()
+        process = _run_with_sudo(command)
 
-        # Check the result
+        stdout = process.stdout.strip()
+        stderr = process.stderr.strip()
+
         if process.returncode == 0:
             print(f"Successfully set {vram_key} to {target_value}.")
-            return True, "Success"
-        else:
-            # Handle potential errors, including user cancellation
-            error_message = stderr.strip()
-            if "User canceled" in error_message or "(-128)" in error_message:
-                 print("VRAM setting canceled by user.")
-                 return False, "Cancelled by user."
-            else:
-                print(f"Failed to set {vram_key}. Return code: {process.returncode}, Stderr: {error_message}")
-                # Provide a more user-friendly error if possible
-                if "operation not permitted" in error_message.lower():
-                    friendly_error = "Failed to set VRAM: Operation not permitted.\nEnsure you have administrator rights."
-                else:
-                    friendly_error = f"Failed to set VRAM.\nError: {error_message}"
-                # Display error to user via MessageBox
-                QMessageBox.warning(None, "VRAM Set Failed", friendly_error)
-                return False, friendly_error
+            return True, stdout or "Success"
 
+        error_message = stderr or stdout or "Unknown error"
+        print(
+            f"Failed to set {vram_key}. "
+            f"Return code: {process.returncode}, Error: {error_message}"
+        )
+
+        lower_error = error_message.lower()
+        if "a password is required" in lower_error or "no tty present" in lower_error:
+            friendly_error = (
+                "Failed to set VRAM: sudo requires an interactive password prompt.\n"
+                "Run this command from a terminal session with sudo available, or use "
+                "a privileged helper for GUI execution."
+            )
+        elif "incorrect password" in lower_error or "sorry, try again" in lower_error:
+            friendly_error = "Failed to set VRAM: Incorrect sudo password."
+        elif "operation not permitted" in lower_error:
+            friendly_error = (
+                "Failed to set VRAM: Operation not permitted.\n"
+                "Ensure the process has administrator privileges."
+            )
+        else:
+            friendly_error = f"Failed to set VRAM.\nError: {error_message}"
+
+        QMessageBox.warning(None, "VRAM Set Failed", friendly_error)
+        return False, friendly_error
+
+    except FileNotFoundError:
+        error_msg = f"Failed to set VRAM: {SUDO_PATH} was not found."
+        print(error_msg)
+        QMessageBox.critical(None, "VRAM Set Error", error_msg)
+        return False, error_msg
     except Exception as e:
         error_msg = f"An exception occurred trying to set VRAM: {e}"
         print(error_msg)
